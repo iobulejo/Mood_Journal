@@ -3,7 +3,7 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import mysql.connector
+import psycopg2
 import requests
 import bcrypt
 import jwt
@@ -30,15 +30,15 @@ if DATABASE_URL:
         host=url_parts.hostname,
         user=url_parts.username,
         password=url_parts.password,
-        database=url_parts.path[1:],
-        port=url_parts.port if url_parts.port else 3306
+        dbname=url_parts.path[1:],
+        port=url_parts.port if url_parts.port else 5432
     )
 else:
     DB_CFG = dict(
         host=os.getenv("DB_HOST", "localhost"),
         user=os.getenv("DB_USER", "root"),
         password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "mood_journal_db"),
+        dbname=os.getenv("DB_NAME", "mood_journal_db"),
     )
 
 # Subscription plans configuration
@@ -72,7 +72,7 @@ SUBSCRIPTION_PLANS = {
 # Helper function to connect to the database
 def connect_db():
     try:
-        return mysql.connector.connect(**DB_CFG)
+        return psycopg2.connect(**DB_CFG)
     except Exception as e:
         print(f"Database connection error: {e}")
         return None
@@ -187,17 +187,18 @@ def api_register():
         cur = conn.cursor()
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
-        cur.execute("INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s)",
+        # PostgreSQL's INSERT syntax with RETURNING
+        cur.execute("INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s) RETURNING id",
                     (name, email, password_hash))
+        user_id = cur.fetchone()[0]
         conn.commit()
-
-        user_id = cur.lastrowid
+        
         token = jwt.encode({"user_id": user_id, "exp": datetime.utcnow() + timedelta(days=1)},
                            JWT_SECRET, algorithm="HS256")
         
         return jsonify({"message": "User registered successfully", "token": token, "user_id": user_id})
-    except mysql.connector.Error as err:
-        if err.errno == 1062: # Duplicate entry for unique key
+    except psycopg2.Error as err:
+        if 'duplicate key value' in str(err):
             return jsonify({"error": "Email already registered"}), 409
         print(f"Database error: {err}")
         return jsonify({"error": "Registration failed"}), 500
@@ -305,10 +306,8 @@ def api_get_entries():
         params = [user['id']]
         
         if history_days != float('inf'):
-            query += " AND created_at >= %s"
-            # Calculate the date 'history_days' ago
-            history_date = datetime.now() - timedelta(days=history_days)
-            params.append(history_date.isoformat())
+            query += " AND created_at >= NOW() - INTERVAL '%s days'"
+            params.append(str(history_days))
         
         query += " ORDER BY created_at DESC"
         
@@ -346,11 +345,11 @@ def api_get_stats():
         cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s", (user['id'],))
         total_entries = cur.fetchone()[0]
         
-        # Get entries this month
+        # Get entries this month (PostgreSQL compatible)
         cur.execute("""
           SELECT COUNT(*) FROM entries 
-          WHERE user_id = %s AND created_at >= %s
-        """, (user['id'], date.today().replace(day=1)))
+          WHERE user_id = %s AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM NOW()) AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM NOW())
+        """, (user['id'],))
         monthly_entries = cur.fetchone()[0]
         
         # Get most common emotion
