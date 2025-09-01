@@ -1,5 +1,5 @@
 import os, json, decimal
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
@@ -7,8 +7,8 @@ import mysql.connector
 import requests
 import bcrypt
 import jwt
-import collections
-from collections import defaultdict
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 load_dotenv()
 
@@ -17,12 +17,25 @@ HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"} if HF_API_TOKEN else {}
 EMOTION_MODEL = os.getenv("EMOTION_MODEL", "j-hartmann/emotion-english-distilroberta-base")
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 
-DB_CFG = dict(
-    host=os.getenv("DB_HOST", "localhost"),
-    user=os.getenv("DB_USER", "root"),
-    password=os.getenv("DB_PASSWORD", ""),
-    database=os.getenv("DB_NAME", "mood_journal_db"),
-)
+# Define the database configuration from a single URL
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    url = urlparse(DATABASE_URL)
+    DB_CFG = dict(
+        host=url.hostname,
+        user=url.username,
+        password=url.password,
+        database=url.path[1:],
+        port=url.port,
+    )
+else:
+    # Fallback for local development
+    DB_CFG = dict(
+        host=os.getenv("DB_HOST", "localhost"),
+        user=os.getenv("DB_USER", "root"),
+        password=os.getenv("DB_PASSWORD", ""),
+        database=os.getenv("DB_NAME", "mood_journal_db"),
+    )
 
 # Subscription plans configuration
 SUBSCRIPTION_PLANS = {
@@ -37,404 +50,304 @@ SUBSCRIPTION_PLANS = {
     "premium": {
         "name": "Premium",
         "monthly_price": 9.99,
-        "max_entries": 1000,
+        "max_entries": float('inf'),
         "history_days": 30,
-        "features": ["Detailed emotion analysis", "30-day history", "Advanced analytics", "Export to CSV"]
+        "features": ["Unlimited entries", "30-day history", "Advanced analytics", "Export"],
+        "limitations": []
     },
     "enterprise": {
         "name": "Enterprise",
         "monthly_price": 29.99,
-        "max_entries": 10000,
-        "history_days": 365,
-        "features": ["Team management", "Unlimited history", "API access", "Custom emotion models"]
+        "max_entries": float('inf'),
+        "history_days": float('inf'),
+        "features": ["Unlimited everything", "1-year history", "Team features", "API access"],
+        "limitations": []
     }
 }
 
-# New: Emojis for each emotion label
-EMOTION_EMOJIS = {
-    'joy': '😊',
-    'sadness': '😢',
-    'anger': '😠',
-    'fear': '😨',
-    'disgust': '🤢',
-    'surprise': '😮',
-    'neutral': '😐',
-}
-
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-key")
+app = Flask(__name__, static_folder="static")
 CORS(app)
 
+# Helper function to connect to the database
 def connect_db():
-    return mysql.connector.connect(**DB_CFG)
-
-def init_db():
-    conn = connect_db()
     try:
-        cur = conn.cursor()
-        # Create users table
-        cur.execute("""
-          CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            name VARCHAR(255),
-            subscription_tier VARCHAR(20) DEFAULT 'free',
-            subscription_start DATE,
-            entries_this_month INT DEFAULT 0,
-            last_reset_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          )
-        """)
-        
-        # Create entries table with user_id foreign key
-        cur.execute("""
-          CREATE TABLE IF NOT EXISTS entries (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            content TEXT NOT NULL,
-            emotion_label VARCHAR(32) NOT NULL,
-            emotion_score DECIMAL(5,2) NOT NULL,
-            emotions_json JSON NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-          )
-        """)
-        
-        # Create payments table
-        cur.execute("""
-          CREATE TABLE IF NOT EXISTS payments (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            amount DECIMAL(10,2) NOT NULL,
-            plan VARCHAR(20) NOT NULL,
-            status VARCHAR(20) DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-          )
-        """)
-        
-        conn.commit()
-    finally:
-        conn.close()
-
-def hash_password(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def check_password(password, hashed):
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-
-def create_jwt_token(user_id):
-    payload = {
-        'user_id': user_id,
-        'exp': datetime.utcnow() + timedelta(days=7)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
-
-def verify_jwt_token(token):
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-        return payload
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
+        return mysql.connector.connect(**DB_CFG)
+    except mysql.connector.Error as err:
+        print(f"Database connection failed: {err}")
         return None
 
+# Helper function to verify and decode JWT
 def get_user_from_request():
     auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
+    if not auth_header:
         return None
-        
-    token = auth_header[7:]
-    payload = verify_jwt_token(token)
-    if not payload:
+    try:
+        token = auth_header.split(" ")[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload['user']
+    except (jwt.InvalidTokenError, IndexError):
         return None
+
+# Emotion analysis function
+def analyze_emotion(text):
+    if not HF_API_TOKEN:
+        return "neutral", 0.5
+    
+    API_URL = f"https://api-inference.huggingface.co/models/{EMOTION_MODEL}"
+    try:
+        response = requests.post(API_URL, headers=HF_HEADERS, json={"inputs": text})
+        response.raise_for_status()
+        result = response.json()[0]
         
-    conn = connect_db()
-    try:
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT id, email, name, subscription_tier, entries_this_month FROM users WHERE id = %s", (payload['user_id'],))
-        return cur.fetchone()
-    finally:
-        conn.close()
-
-def get_user_entries_this_month(user_id):
-    conn = connect_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT last_reset_date, entries_this_month FROM users WHERE id = %s", (user_id,))
-        user_data = cur.fetchone()
-        
-        if user_data:
-            last_reset, entries_count = user_data
-            current_date = date.today()
-            
-            if last_reset.month != current_date.month or last_reset.year != current_date.year:
-                cur.execute("""
-                  UPDATE users 
-                  SET entries_this_month = 0, last_reset_date = %s 
-                  WHERE id = %s
-                """, (current_date, user_id))
-                conn.commit()
-                return 0
-            return entries_count
-        return 0
-    finally:
-        conn.close()
-
-def increment_user_entries(user_id):
-    conn = connect_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-          UPDATE users 
-          SET entries_this_month = entries_this_month + 1 
-          WHERE id = %s
-        """, (user_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-def analyze_emotion(text: str):
-    url = f"https://api-inference.huggingface.co/models/{EMOTION_MODEL}"
-    payload = {"inputs": text}
-    r = requests.post(url, headers=HF_HEADERS, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    distribution = data[0] if isinstance(data, list) and isinstance(data[0], list) else data
-    dist_norm = sorted(
-        [{"label": d["label"], "score": round(float(d["score"]) * 100, 2)} for d in distribution],
-        key=lambda x: x["score"], reverse=True
-    )
-    top = dist_norm[0] if dist_norm else {"label": "neutral", "score": 50.0}
-    return top["label"], top["score"], dist_norm
-
-def row_to_entry(row):
-    return {
-        "id": row[0],
-        "content": row[1],
-        "emotion_label": row[2],
-        "emotion_emoji": EMOTION_EMOJIS.get(row[2], '❓'), # New field with emoji
-        "emotion_score": float(row[3]) if isinstance(row[3], (float, int, decimal.Decimal)) else row[3],
-        "emotions": json.loads(row[4]) if row[4] else [],
-        "created_at": row[5].isoformat() if isinstance(row[5], datetime) else row[5],
-    }
+        # Find the highest scoring emotion
+        max_score = 0
+        best_emotion = "neutral"
+        for item in result:
+            if item['score'] > max_score:
+                max_score = item['score']
+                best_emotion = item['label']
+                
+        return best_emotion, float(max_score)
+    except requests.exceptions.RequestException as e:
+        print(f"Hugging Face API error: {e}")
+        return "error", 0.0
 
 @app.route("/")
-def home():
-    return send_from_directory("static", "index.html")
+def index():
+    return send_from_directory('static', 'index.html')
 
 @app.route("/login.html")
 def login_page():
-    return render_template("login.html")
+    return send_from_directory('static', 'login.html')
 
 @app.route("/register.html")
 def register_page():
-    return render_template("register.html")
+    return send_from_directory('static', 'register.html')
 
 @app.route("/dashboard")
 def dashboard_page():
-    return render_template("dashboard.html")
+    return render_template('dashboard.html')
+
+@app.route("/profile")
+def profile_page():
+    return render_template('profile.html')
 
 @app.post("/api/register")
 def api_register():
-    data = request.get_json(silent=True) or {}
-    email, password, name = data.get("email","").strip(), data.get("password",""), data.get("name","").strip()
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not all([name, email, password]):
+        return jsonify({"error": "Missing required fields"}), 400
+
     conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+        
+        # Check if user already exists
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
-            return jsonify({"error": "User already exists"}), 409
+            return jsonify({"error": "User with this email already exists"}), 409
         
-        password_hash = hash_password(password)
-        
-        sql = "INSERT INTO users (email, password_hash, name, subscription_tier, subscription_start) VALUES (%s, %s, %s, %s, %s)"
-        values = (email, password_hash, name, 'free', date.today())
-        cur.execute(sql, values)
+        # Hash password and insert user
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        cur.execute("INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s)", (name, email, hashed_password))
         conn.commit()
         
         user_id = cur.lastrowid
-        token = create_jwt_token(user_id)
+        
+        # Generate JWT
+        payload = {'user': {'id': user_id, 'name': name, 'email': email, 'subscription_tier': 'free'}, 'exp': datetime.utcnow() + timedelta(days=7)}
+        token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
         
         return jsonify({
             "message": "User registered successfully",
             "token": token,
-            "user": {
-                "id": user_id,
-                "email": email,
-                "name": name,
-                "subscription_tier": "free"
-            }
+            "user": {'id': user_id, 'name': name, 'email': email, 'subscription_tier': 'free'}
         }), 201
     except mysql.connector.Error as err:
-        conn.rollback()
-        return jsonify({"error": f"Database error: {err}"}), 500
+        print(f"MySQL error: {err}")
+        return jsonify({"error": "Database error"}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 @app.post("/api/login")
 def api_login():
-    data = request.get_json(silent=True) or {}
-    email, password = data.get("email", "").strip(), data.get("password", "")
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
 
+    if not all([email, password]):
+        return jsonify({"error": "Missing email or password"}), 400
+    
     conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+
     try:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT id, password_hash, name, subscription_tier FROM users WHERE email=%s", (email,))
+        cur.execute("SELECT * FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
 
-        if user and check_password(password, user['password_hash']):
-            token = create_jwt_token(user['id'])
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            # Get user's subscription tier
+            tier = user.get('subscription_tier', 'free')
+
+            # Generate JWT
+            payload = {'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'subscription_tier': tier}, 'exp': datetime.utcnow() + timedelta(days=7)}
+            token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+            
             return jsonify({
                 "message": "Login successful",
                 "token": token,
-                "user": {
-                    "id": user['id'],
-                    "email": email,
-                    "name": user['name'],
-                    "subscription_tier": user['subscription_tier']
-                }
+                "user": {'id': user['id'], 'name': user['name'], 'email': user['email'], 'subscription_tier': tier}
             })
         else:
             return jsonify({"error": "Invalid email or password"}), 401
+    except mysql.connector.Error as err:
+        print(f"MySQL error: {err}")
+        return jsonify({"error": "Database error"}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-@app.get("/api/profile")
-def get_profile():
+@app.post("/api/journal/entry")
+def api_add_entry():
     user = get_user_from_request()
     if not user:
         return jsonify({"error": "Authentication required"}), 401
-        
-    entries_this_month = get_user_entries_this_month(user['id'])
-    plan = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])
-    
-    return jsonify({
-        "user": user,
-        "usage": {
-            "entries_this_month": entries_this_month,
-            "entries_remaining": plan['max_entries'] - entries_this_month,
-            "max_entries": plan['max_entries']
-        },
-        "plan": plan
-    })
-
-@app.get("/api/entries")
-def list_entries():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({"error": "Authentication required"}), 401
-        
-    try:
-        limit = int(request.args.get("limit", 10))
-        offset = int(request.args.get("offset", 0))
-    except ValueError:
-        return jsonify({"error": "Invalid pagination params"}), 400
-
-    plan = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])
-    history_days = plan['history_days']
-    date_limit = f"DATE_SUB(NOW(), INTERVAL {history_days} DAY)"
-    
-    start_date = request.args.get("start_date")
-    end_date = request.args.get("end_date")
-
-    filters = [f"user_id = %s", f"created_at >= {date_limit}"]
-    params = [user['id']]
-    
-    if start_date:
-        filters.append("created_at >= %s")
-        params.append(start_date)
-    if end_date:
-        filters.append("created_at <= %s")
-        params.append(end_date)
-        
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
 
     conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+
     try:
         cur = conn.cursor()
-        cur.execute(f"""
-          SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
-          FROM entries
-          {where_clause}
-          ORDER BY created_at DESC
-          LIMIT %s OFFSET %s
-        """, (*params, limit, offset))
-        rows = cur.fetchall()
+        
+        # Check entry limits for 'free' tier
+        if user['subscription_tier'] == 'free':
+            cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s AND created_at >= CURDATE() - INTERVAL %s DAY", (user['id'], SUBSCRIPTION_PLANS['free']['history_days']))
+            entry_count = cur.fetchone()[0]
+            if entry_count >= SUBSCRIPTION_PLANS['free']['max_entries']:
+                return jsonify({"error": f"Free plan is limited to {SUBSCRIPTION_PLANS['free']['max_entries']} entries per month."}), 403
 
-        cur.execute(f"SELECT COUNT(*) FROM entries {where_clause}", tuple(params))
-        total = cur.fetchone()[0]
+        data = request.get_json(silent=True) or {}
+        content = data.get('content')
+        if not content:
+            return jsonify({"error": "Journal entry cannot be empty"}), 400
+        
+        # Analyze the emotion
+        emotion_label, emotion_score = analyze_emotion(content)
 
-        entries = [row_to_entry(r) for r in rows]
-
-        original_trend = [
-            {"created_at": e["created_at"], "score": e["emotion_score"]}
-            for e in entries
-        ]
-
-        multi_trend = [
-            {"created_at": e["created_at"], "emotions": e["emotions"]}
-            for e in entries
-        ]
+        cur.execute("INSERT INTO entries (user_id, content, emotion_label, emotion_score) VALUES (%s, %s, %s, %s)", (user['id'], content, emotion_label, decimal.Decimal(emotion_score)))
+        conn.commit()
 
         return jsonify({
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "entries": entries,
-            "original_trend": original_trend,
-            "multi_trend": multi_trend
+            "message": "Entry saved successfully",
+            "entry": {
+                "content": content,
+                "emotion_label": emotion_label,
+                "emotion_score": str(emotion_score)
+            }
+        }), 201
+
+    except mysql.connector.Error as err:
+        print(f"MySQL error: {err}")
+        return jsonify({"error": "Database error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.get("/api/journal/entries")
+def api_get_entries():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({"error": "Authentication required"}), 401
+    
+    conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        cur = conn.cursor(dictionary=True)
+        
+        limit_days = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])['history_days']
+        
+        # Query entries based on the user's subscription tier
+        if limit_days == float('inf'):
+            cur.execute("SELECT id, content, emotion_label, emotion_score, created_at FROM entries WHERE user_id = %s ORDER BY created_at DESC", (user['id'],))
+        else:
+            cur.execute("SELECT id, content, emotion_label, emotion_score, created_at FROM entries WHERE user_id = %s AND created_at >= CURDATE() - INTERVAL %s DAY ORDER BY created_at DESC", (user['id'], limit_days))
+
+        entries = cur.fetchall()
+        
+        # Format the date and score for JSON
+        for entry in entries:
+            entry['created_at'] = entry['created_at'].isoformat()
+            entry['emotion_score'] = str(entry['emotion_score'])
+        
+        return jsonify({"entries": entries})
+    except mysql.connector.Error as err:
+        print(f"MySQL error: {err}")
+        return jsonify({"error": "Database error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+@app.get("/api/journal/stats")
+def api_get_stats():
+    user = get_user_from_request()
+    if not user:
+        return jsonify({"error": "Authentication required"}), 401
+        
+    conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+    try:
+        cur = conn.cursor()
+        
+        # Get total entries
+        cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s", (user['id'],))
+        total_entries = cur.fetchone()[0]
+        
+        # Get entries this month
+        cur.execute("""
+          SELECT COUNT(*) FROM entries 
+          WHERE user_id = %s AND MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE())
+        """, (user['id'],))
+        monthly_entries = cur.fetchone()[0]
+        
+        # Get most common emotion
+        cur.execute("""
+          SELECT emotion_label, COUNT(*) as count 
+          FROM entries 
+          WHERE user_id = %s 
+          GROUP BY emotion_label 
+          ORDER BY count DESC 
+          LIMIT 1
+        """, (user['id'],))
+        most_common = cur.fetchone()
+        top_emotion = most_common[0] if most_common else "None"
+        
+        # Get average emotion score
+        cur.execute("SELECT AVG(emotion_score) FROM entries WHERE user_id = %s", (user['id'],))
+        avg_score = cur.fetchone()[0] or 0
+        
+        return jsonify({
+            "total_entries": total_entries,
+            "monthly_entries": monthly_entries,
+            "top_emotion": top_emotion,
+            "avg_score": str(avg_score)
         })
     finally:
-        conn.close()
-
-@app.post("/api/entries")
-def create_entry():
-    user = get_user_from_request()
-    if not user:
-        return jsonify({"error": "Authentication required"}), 401
-        
-    data = request.get_json(silent=True) or {}
-    content = (data.get("content") or "").strip()
-    if not content:
-        return jsonify({"error": "content is required"}), 400
-        
-    entries_this_month = get_user_entries_this_month(user['id'])
-    plan = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])
-    
-    if entries_this_month >= plan['max_entries']:
-        return jsonify({
-            "error": "Monthly entry limit exceeded",
-            "limit": plan['max_entries'],
-            "current": entries_this_month
-        }), 429
-        
-    label, score_pct, dist = analyze_emotion(content)
-    conn = connect_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-          INSERT INTO entries (user_id, content, emotion_label, emotion_score, emotions_json)
-          VALUES (%s, %s, %s, %s, %s)
-        """, (user['id'], content, label, score_pct, json.dumps(dist)))
-        conn.commit()
-        
-        increment_user_entries(user['id'])
-        
-        entry_id = cur.lastrowid
-        cur.execute("""
-          SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
-          FROM entries WHERE id=%s
-        """, (entry_id,))
-        row = cur.fetchone()
-        return jsonify(row_to_entry(row)), 201
-    finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 @app.post("/api/subscription/upgrade")
 def upgrade_subscription():
@@ -449,19 +362,16 @@ def upgrade_subscription():
         return jsonify({"error": "Invalid plan specified"}), 400
         
     conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+
     try:
         cur = conn.cursor()
         cur.execute("""
-          UPDATE users 
-          SET subscription_tier = %s, subscription_start = CURDATE() 
-          WHERE id = %s
+            UPDATE users 
+            SET subscription_tier = %s
+            WHERE id = %s
         """, (plan_tier, user['id']))
-        conn.commit()
-        
-        cur.execute("""
-          INSERT INTO payments (user_id, amount, plan, status)
-          VALUES (%s, %s, %s, %s)
-        """, (user['id'], SUBSCRIPTION_PLANS[plan_tier]['monthly_price'], plan_tier, 'completed'))
         conn.commit()
         
         return jsonify({
@@ -469,131 +379,33 @@ def upgrade_subscription():
             "plan": SUBSCRIPTION_PLANS[plan_tier]
         })
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-# The corrected get_stats route to include charts data
-@app.get("/api/stats")
-def get_stats():
+@app.get("/api/profile/info")
+def get_profile_info():
     user = get_user_from_request()
     if not user:
         return jsonify({"error": "Authentication required"}), 401
-        
+    
     conn = connect_db()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur = conn.cursor()
-        
-        cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s", (user['id'],))
-        total_entries = cur.fetchone()[0]
-        
-        cur.execute("""
-          SELECT COUNT(*) FROM entries 
-          WHERE user_id = %s AND MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE())
-        """, (user['id'],))
-        monthly_entries = cur.fetchone()[0]
-        
-        cur.execute("""
-          SELECT emotion_label, COUNT(*) as count 
-          FROM entries 
-          WHERE user_id = %s 
-          GROUP BY emotion_label 
-          ORDER BY count DESC 
-          LIMIT 1
-        """, (user['id'],))
-        most_common = cur.fetchone()
-        
-        top_emotion = f"{most_common[0]} {EMOTION_EMOJIS.get(most_common[0], '❓')}" if most_common else "None"
-        
-        cur.execute("SELECT AVG(emotion_score) FROM entries WHERE user_id = %s", (user['id'],))
-        avg_score = cur.fetchone()[0] or 0
-        
-        # Emotion Distribution Data
-        cur.execute("""
-            SELECT emotion_label, COUNT(*) FROM entries
-            WHERE user_id = %s
-            GROUP BY emotion_label
-        """, (user['id'],))
-        emotion_counts = cur.fetchall()
-        
-        emotion_distribution_data = [
-            {"label": label, "count": count, "emoji": EMOTION_EMOJIS.get(label, '❓')}
-            for label, count in emotion_counts
-        ]
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT name, email, subscription_tier, created_at FROM users WHERE id = %s", (user['id'],))
+        profile_info = cur.fetchone()
 
-        # Mood Trend Data (last 30 days)
-        trend_data = defaultdict(lambda: {'count': 0, 'total_score': 0})
-        end_date = datetime.utcnow().date()
-        start_date = end_date - timedelta(days=30)
+        if not profile_info:
+            return jsonify({"error": "User not found"}), 404
         
-        cur.execute("""
-            SELECT created_at, emotion_score FROM entries
-            WHERE user_id = %s AND created_at BETWEEN %s AND %s
-            ORDER BY created_at
-        """, (user['id'], start_date, end_date))
-        daily_scores = cur.fetchall()
-
-        for timestamp, score in daily_scores:
-            date_str = timestamp.strftime('%Y-%m-%d')
-            trend_data[date_str]['count'] += 1
-            trend_data[date_str]['total_score'] += float(score)
-
-        mood_trend_data = []
-        for i in range(31):
-            day = start_date + timedelta(days=i)
-            day_str = day.strftime('%Y-%m-%d')
-            entry = trend_data.get(day_str)
-            avg_score = round(entry['total_score'] / entry['count'], 2) if entry and entry['count'] > 0 else 0
-            mood_trend_data.append({'date': day_str, 'average_score': avg_score})
-
-        # New: Weekly Mood Pattern
-        weekly_mood = collections.OrderedDict({
-            'Monday': {'total_score': 0, 'count': 0},
-            'Tuesday': {'total_score': 0, 'count': 0},
-            'Wednesday': {'total_score': 0, 'count': 0},
-            'Thursday': {'total_score': 0, 'count': 0},
-            'Friday': {'total_score': 0, 'count': 0},
-            'Saturday': {'total_score': 0, 'count': 0},
-            'Sunday': {'total_score': 0, 'count': 0}
-        })
+        profile_info['created_at'] = profile_info['created_at'].isoformat()
         
-        cur.execute("SELECT created_at, emotion_score FROM entries WHERE user_id = %s", (user['id'],))
-        weekly_data = cur.fetchall()
-        for timestamp, score in weekly_data:
-            day_name = timestamp.strftime('%A')
-            weekly_mood[day_name]['total_score'] += float(score)
-            weekly_mood[day_name]['count'] += 1
-            
-        weekly_pattern = [{'day': day, 'average_score': round(data['total_score'] / data['count'], 2) if data['count'] > 0 else 0} for day, data in weekly_mood.items()]
-
-        # New: Emotion Correlation
-        cur.execute("SELECT emotions_json FROM entries WHERE user_id = %s", (user['id'],))
-        all_emotions_json = [json.loads(row[0]) for row in cur.fetchall() if row[0]]
-        
-        emotion_pairs = defaultdict(int)
-        for emotions in all_emotions_json:
-            labels = sorted([e['label'] for e in emotions])
-            for i in range(len(labels)):
-                for j in range(i + 1, len(labels)):
-                    pair = tuple(sorted((labels[i], labels[j])))
-                    emotion_pairs[pair] += 1
-        
-        emotion_correlation_data = [
-            {'pair': f'{p[0]} & {p[1]}', 'count': c} for p, c in emotion_pairs.items()
-        ]
-            
-        return jsonify({
-            "total_entries": total_entries,
-            "monthly_entries": monthly_entries,
-            "top_emotion": top_emotion,
-            "avg_score": float(avg_score) if avg_score else 0,
-            "emotion_distribution": emotion_distribution_data,
-            "mood_trend": mood_trend_data,
-            "weekly_mood_pattern": weekly_pattern,
-            "emotion_correlation": emotion_correlation_data
-        })
+        return jsonify(profile_info)
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-if __name__ == "__main__":
-    init_db()
-
-    app.run(debug=False)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
