@@ -1,5 +1,3 @@
-# Mood_Journal
-MoodJournalApp
 Mood Journal: An AI-Powered Emotion Tracker
 Welcome to Mood Journal, a full-stack web application designed to help users track their emotional well-being through daily journaling. This application uses an AI model to analyze journal entries and provide users with a deeper understanding of their mood patterns and emotional states over time.
 
@@ -49,6 +47,7 @@ Follow these steps to get the project running on your local machine.
 git clone <repository_url>
 cd mood-journal
 
+
 2. Set up the Python backend
 Navigate to the project root directory.
 Create and activate a virtual environment:
@@ -56,11 +55,11 @@ Create and activate a virtual environment:
 python3 -m venv venv
 source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
 
-Install the required Python packages:
+
+Install the required Python packages from the new requirements.txt file:
 
 pip install -r requirements.txt
 
-Note: A requirements.txt file is not included, but the necessary packages can be found in app.py. These include Flask, mysql-connector-python, python-dotenv, requests, bcrypt, and PyJWT.
 
 Create a .env file in the root directory with the following variables. Replace the placeholders with your actual credentials and API key.
 
@@ -71,11 +70,13 @@ DB_USER=root
 DB_PASSWORD=your_mysql_password
 DB_NAME=mood_journal_db
 
+
 3. Database Setup
 Ensure you have a MySQL server running. Log in to your MySQL shell and create the database:
 
 CREATE DATABASE mood_journal_db;
 USE mood_journal_db;
+
 
 Create the users table:
 
@@ -86,6 +87,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 Create the entries table:
 
@@ -99,10 +101,12 @@ CREATE TABLE entries (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+
 4. Run the Application
 Start the Flask development server:
 
 flask run
+
 
 The application will be accessible at http://127.0.0.1:5000. You can now navigate to this URL in your web browser to use the Mood Journal app.
 
@@ -123,4 +127,4 @@ Contributing
 We welcome contributions! Please feel free to open an issue or submit a pull request with improvements.
 
 License
-This project is licensed under the MIT License.
+This project is licensed under the Free License
