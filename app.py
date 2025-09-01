@@ -1,9 +1,13 @@
-import os, json, decimal
+import os
+import json
+import decimal
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
-import mysql.connector
+import psycopg2 # Changed from mysql.connector
+from psycopg2.extras import RealDictCursor # To get dictionary-like rows
+from urllib.parse import urlparse # To parse DATABASE_URL
 import requests
 import bcrypt
 import jwt
@@ -17,12 +21,8 @@ HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"} if HF_API_TOKEN else {}
 EMOTION_MODEL = os.getenv("EMOTION_MODEL", "j-hartmann/emotion-english-distilroberta-base")
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 
-DB_CFG = dict(
-    host=os.getenv("DB_HOST", "localhost"),
-    user=os.getenv("DB_USER", "root"),
-    password=os.getenv("DB_PASSWORD", ""),
-    database=os.getenv("DB_NAME", "mood_journal_db"),
-)
+# New: Use a single DATABASE_URL for connection
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Subscription plans configuration
 SUBSCRIPTION_PLANS = {
@@ -66,52 +66,55 @@ app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-key")
 CORS(app)
 
 def connect_db():
-    return mysql.connector.connect(**DB_CFG)
+    """Connects to the PostgreSQL database using the DATABASE_URL."""
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL environment variable is not set")
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     conn = connect_db()
     try:
         cur = conn.cursor()
-        # Create users table
+        # Create users table with PostgreSQL syntax
         cur.execute("""
-          CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            name VARCHAR(255),
-            subscription_tier VARCHAR(20) DEFAULT 'free',
-            subscription_start DATE,
-            entries_this_month INT DEFAULT 0,
-            last_reset_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          )
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                name VARCHAR(255),
+                subscription_tier VARCHAR(20) DEFAULT 'free',
+                subscription_start DATE,
+                entries_this_month INT DEFAULT 0,
+                last_reset_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
         """)
         
         # Create entries table with user_id foreign key
         cur.execute("""
-          CREATE TABLE IF NOT EXISTS entries (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            content TEXT NOT NULL,
-            emotion_label VARCHAR(32) NOT NULL,
-            emotion_score DECIMAL(5,2) NOT NULL,
-            emotions_json JSON NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-          )
+            CREATE TABLE IF NOT EXISTS entries (
+                id SERIAL PRIMARY KEY,
+                user_id INT NOT NULL,
+                content TEXT NOT NULL,
+                emotion_label VARCHAR(32) NOT NULL,
+                emotion_score DECIMAL(5,2) NOT NULL,
+                emotions_json JSONB NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
         """)
         
         # Create payments table
         cur.execute("""
-          CREATE TABLE IF NOT EXISTS payments (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            amount DECIMAL(10,2) NOT NULL,
-            plan VARCHAR(20) NOT NULL,
-            status VARCHAR(20) DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-          )
+            CREATE TABLE IF NOT EXISTS payments (
+                id SERIAL PRIMARY KEY,
+                user_id INT NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                plan VARCHAR(20) NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
         """)
         
         conn.commit()
@@ -152,7 +155,8 @@ def get_user_from_request():
         
     conn = connect_db()
     try:
-        cur = conn.cursor(dictionary=True)
+        # Use RealDictCursor to get dictionary-like results
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id, email, name, subscription_tier, entries_this_month FROM users WHERE id = %s", (payload['user_id'],))
         return cur.fetchone()
     finally:
@@ -171,9 +175,9 @@ def get_user_entries_this_month(user_id):
             
             if last_reset.month != current_date.month or last_reset.year != current_date.year:
                 cur.execute("""
-                  UPDATE users 
-                  SET entries_this_month = 0, last_reset_date = %s 
-                  WHERE id = %s
+                    UPDATE users 
+                    SET entries_this_month = 0, last_reset_date = %s 
+                    WHERE id = %s
                 """, (current_date, user_id))
                 conn.commit()
                 return 0
@@ -187,9 +191,9 @@ def increment_user_entries(user_id):
     try:
         cur = conn.cursor()
         cur.execute("""
-          UPDATE users 
-          SET entries_this_month = entries_this_month + 1 
-          WHERE id = %s
+            UPDATE users 
+            SET entries_this_month = entries_this_month + 1 
+            WHERE id = %s
         """, (user_id,))
         conn.commit()
     finally:
@@ -210,14 +214,15 @@ def analyze_emotion(text: str):
     return top["label"], top["score"], dist_norm
 
 def row_to_entry(row):
+    # Now expects a dictionary-like object from RealDictCursor
     return {
-        "id": row[0],
-        "content": row[1],
-        "emotion_label": row[2],
-        "emotion_emoji": EMOTION_EMOJIS.get(row[2], '❓'), # New field with emoji
-        "emotion_score": float(row[3]) if isinstance(row[3], (float, int, decimal.Decimal)) else row[3],
-        "emotions": json.loads(row[4]) if row[4] else [],
-        "created_at": row[5].isoformat() if isinstance(row[5], datetime) else row[5],
+        "id": row['id'],
+        "content": row['content'],
+        "emotion_label": row['emotion_label'],
+        "emotion_emoji": EMOTION_EMOJIS.get(row['emotion_label'], '❓'),
+        "emotion_score": float(row['emotion_score']),
+        "emotions": row['emotions_json'] if row['emotions_json'] else [],
+        "created_at": row['created_at'].isoformat(),
     }
 
 @app.route("/")
@@ -251,12 +256,13 @@ def api_register():
         
         password_hash = hash_password(password)
         
-        sql = "INSERT INTO users (email, password_hash, name, subscription_tier, subscription_start) VALUES (%s, %s, %s, %s, %s)"
+        # Use RETURNING id to get the new user's ID
+        sql = "INSERT INTO users (email, password_hash, name, subscription_tier, subscription_start) VALUES (%s, %s, %s, %s, %s) RETURNING id"
         values = (email, password_hash, name, 'free', date.today())
         cur.execute(sql, values)
+        user_id = cur.fetchone()[0] # Fetch the returned ID
         conn.commit()
         
-        user_id = cur.lastrowid
         token = create_jwt_token(user_id)
         
         return jsonify({
@@ -269,7 +275,7 @@ def api_register():
                 "subscription_tier": "free"
             }
         }), 201
-    except mysql.connector.Error as err:
+    except psycopg2.Error as err: # Changed error type
         conn.rollback()
         return jsonify({"error": f"Database error: {err}"}), 500
     finally:
@@ -284,7 +290,7 @@ def api_login():
 
     conn = connect_db()
     try:
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor) # Use RealDictCursor
         cur.execute("SELECT id, password_hash, name, subscription_tier FROM users WHERE email=%s", (email,))
         user = cur.fetchone()
 
@@ -338,13 +344,13 @@ def list_entries():
 
     plan = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])
     history_days = plan['history_days']
-    date_limit = f"DATE_SUB(NOW(), INTERVAL {history_days} DAY)"
     
     start_date = request.args.get("start_date")
     end_date = request.args.get("end_date")
 
-    filters = [f"user_id = %s", f"created_at >= {date_limit}"]
-    params = [user['id']]
+    # Use PostgreSQL interval syntax
+    filters = ["user_id = %s", "created_at >= NOW() - INTERVAL '%s days'"]
+    params = [user['id'], history_days]
     
     if start_date:
         filters.append("created_at >= %s")
@@ -357,18 +363,21 @@ def list_entries():
 
     conn = connect_db()
     try:
-        cur = conn.cursor()
-        cur.execute(f"""
-          SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
-          FROM entries
-          {where_clause}
-          ORDER BY created_at DESC
-          LIMIT %s OFFSET %s
-        """, (*params, limit, offset))
+        cur = conn.cursor(cursor_factory=RealDictCursor) # Use RealDictCursor for row_to_entry
+        # Note: f-string is safe here because where_clause is constructed from safe parts
+        query = f"""
+            SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
+            FROM entries
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        cur.execute(query, (*params, limit, offset))
         rows = cur.fetchall()
 
-        cur.execute(f"SELECT COUNT(*) FROM entries {where_clause}", tuple(params))
-        total = cur.fetchone()[0]
+        count_query = f"SELECT COUNT(*) FROM entries {where_clause}"
+        cur.execute(count_query, tuple(params[:-2])) # Exclude limit/offset from count
+        total = cur.fetchone()['count']
 
         entries = [row_to_entry(r) for r in rows]
 
@@ -417,19 +426,21 @@ def create_entry():
     label, score_pct, dist = analyze_emotion(content)
     conn = connect_db()
     try:
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor) # Use RealDictCursor for row_to_entry
         cur.execute("""
-          INSERT INTO entries (user_id, content, emotion_label, emotion_score, emotions_json)
-          VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO entries (user_id, content, emotion_label, emotion_score, emotions_json)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
         """, (user['id'], content, label, score_pct, json.dumps(dist)))
+        
+        entry_id = cur.fetchone()['id'] # Fetch the returned ID
         conn.commit()
         
         increment_user_entries(user['id'])
         
-        entry_id = cur.lastrowid
         cur.execute("""
-          SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
-          FROM entries WHERE id=%s
+            SELECT id, content, emotion_label, emotion_score, emotions_json, created_at
+            FROM entries WHERE id=%s
         """, (entry_id,))
         row = cur.fetchone()
         return jsonify(row_to_entry(row)), 201
@@ -451,16 +462,16 @@ def upgrade_subscription():
     conn = connect_db()
     try:
         cur = conn.cursor()
+        # Use CURRENT_DATE for PostgreSQL
         cur.execute("""
-          UPDATE users 
-          SET subscription_tier = %s, subscription_start = CURDATE() 
-          WHERE id = %s
+            UPDATE users 
+            SET subscription_tier = %s, subscription_start = CURRENT_DATE
+            WHERE id = %s
         """, (plan_tier, user['id']))
-        conn.commit()
         
         cur.execute("""
-          INSERT INTO payments (user_id, amount, plan, status)
-          VALUES (%s, %s, %s, %s)
+            INSERT INTO payments (user_id, amount, plan, status)
+            VALUES (%s, %s, %s, %s)
         """, (user['id'], SUBSCRIPTION_PLANS[plan_tier]['monthly_price'], plan_tier, 'completed'))
         conn.commit()
         
@@ -471,7 +482,6 @@ def upgrade_subscription():
     finally:
         conn.close()
 
-# The corrected get_stats route to include charts data
 @app.get("/api/stats")
 def get_stats():
     user = get_user_from_request()
@@ -485,19 +495,21 @@ def get_stats():
         cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s", (user['id'],))
         total_entries = cur.fetchone()[0]
         
+        # Use EXTRACT for PostgreSQL date functions
         cur.execute("""
-          SELECT COUNT(*) FROM entries 
-          WHERE user_id = %s AND MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE())
+            SELECT COUNT(*) FROM entries 
+            WHERE user_id = %s AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)
         """, (user['id'],))
         monthly_entries = cur.fetchone()[0]
         
         cur.execute("""
-          SELECT emotion_label, COUNT(*) as count 
-          FROM entries 
-          WHERE user_id = %s 
-          GROUP BY emotion_label 
-          ORDER BY count DESC 
-          LIMIT 1
+            SELECT emotion_label, COUNT(*) as count 
+            FROM entries 
+            WHERE user_id = %s 
+            GROUP BY emotion_label 
+            ORDER BY count DESC 
+            LIMIT 1
         """, (user['id'],))
         most_common = cur.fetchone()
         
@@ -546,12 +558,9 @@ def get_stats():
 
         # New: Weekly Mood Pattern
         weekly_mood = collections.OrderedDict({
-            'Monday': {'total_score': 0, 'count': 0},
-            'Tuesday': {'total_score': 0, 'count': 0},
-            'Wednesday': {'total_score': 0, 'count': 0},
-            'Thursday': {'total_score': 0, 'count': 0},
-            'Friday': {'total_score': 0, 'count': 0},
-            'Saturday': {'total_score': 0, 'count': 0},
+            'Monday': {'total_score': 0, 'count': 0}, 'Tuesday': {'total_score': 0, 'count': 0},
+            'Wednesday': {'total_score': 0, 'count': 0}, 'Thursday': {'total_score': 0, 'count': 0},
+            'Friday': {'total_score': 0, 'count': 0}, 'Saturday': {'total_score': 0, 'count': 0},
             'Sunday': {'total_score': 0, 'count': 0}
         })
         
@@ -566,7 +575,7 @@ def get_stats():
 
         # New: Emotion Correlation
         cur.execute("SELECT emotions_json FROM entries WHERE user_id = %s", (user['id'],))
-        all_emotions_json = [json.loads(row[0]) for row in cur.fetchall() if row[0]]
+        all_emotions_json = [row[0] for row in cur.fetchall() if row[0]]
         
         emotion_pairs = defaultdict(int)
         for emotions in all_emotions_json:
