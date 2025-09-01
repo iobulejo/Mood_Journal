@@ -1,8 +1,9 @@
-Flask-cors
+flask-cors
 psycopg2-binary
 python-dotenv
 requests
 bcrypt
 PyJWT
 gunicorn
+
 
