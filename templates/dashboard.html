@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mood Journal Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/css/styles.css" rel="stylesheet" />
+  <link href="/static/css/dashboard.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Mood Journal Dashboard</h1>
+    <div class="user-menu">
+      <span id="userName">User</span>
+      <button id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <div class="sidebar">
+      <nav>
+        <ul>
+          <li><a href="#" class="active" data-section="overview">Overview</a></li>
+          <li><a href="#" data-section="entries">Journal Entries</a></li>
+          <li><a href="#" data-section="subscription">Subscription</a></li>
+          <li><a href="#" data-section="analytics">Analytics</a></li>
+        </ul>
+      </nav>
+      
+      <div class="subscription-status">
+        <h3>Your Plan</h3>
+        <div id="planName" class="plan-badge free">Free</div>
+        <p id="planStatus"><span id="entriesCount">0</span>/<span id="entriesLimit">5</span> entries this month</p>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <section id="overview" class="section active">
+        <h2>Overview</h2>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <h3>Total Entries</h3>
+            <p id="statTotal">0</p>
+          </div>
+          <div class="stat-card">
+            <h3>This Month</h3>
+            <p id="statMonth">0</p>
+          </div>
+          <div class="stat-card">
+            <h3>Top Emotion</h3>
+            <p id="statEmotion">None</p>
+          </div>
+          <div class="stat-card">
+            <h3>Avg. Score</h3>
+            <p id="statScore">0%</p>
+          </div>
+        </div>
+
+        <div class="charts-row">
+          <div class="chart-container">
+            <h3>Mood Trend</h3>
+            <canvas id="moodTrendChart" height="300"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>Emotion Distribution</h3>
+            <canvas id="emotionDistributionChart" height="300"></canvas>
+          </div>
+        </div>
+      </section>
+    
+      <section id="entries" class="section">
+        <h2>Journal Entries</h2>
+        <div class="entry-form">
+          <textarea id="content" placeholder="How are you feeling today?" rows="4"></textarea>
+          <button id="saveEntry">Save Entry</button>
+        </div>
+        
+        <div class="filters">
+          <label for="rangeSelect">Time range:</label>
+          <select id="rangeSelect">
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="365d">Last year</option>
+            <option value="all">All time</option>
+          </select>
+          <button id="applyFilter">Apply</button>
+        </div>
+        
+        <div id="entriesList" class="entries-list"></div>
+        <div class="pagination">
+          <button id="prevPage">Previous</button>
+          <span id="pageInfo">Page 1 of 1</span>
+          <button id="nextPage">Next</button>
+        </div>
+      </section>
+
+      <section id="subscription" class="section">
+        <h2>Subscription Plans</h2>
+        <div class="plans-container">
+          <div class="plan-card">
+            <h3>Free</h3>
+            <div class="price">$0<span>/month</span></div>
+            <ul>
+              <li>5 entries per month</li>
+              <li>7-day history</li>
+              <li>Basic analytics</li>
+              <li>No export</li>
+            </ul>
+            <button class="secondary" id="freePlan">Free Plan</button>
+          </div>
+          
+          <div class="plan-card featured">
+            <h3>Premium</h3>
+            <div class="price">$9.99<span>/month</span></div>
+            <ul>
+              <li>Unlimited entries</li>
+              <li>30-day history</li>
+              <li>Advanced analytics</li>
+              <li>Export to CSV</li>
+            </ul>
+            <button id="upgradePremium">Upgrade to Premium</button>
+          </div>
+          
+          <div class="plan-card">
+            <h3>Enterprise</h3>
+            <div class="price">$29.99<span>/month</span></div>
+            <div class="features">
+              <ul>
+              <li>Unlimited everything</li>
+              <li>1-year history</li>
+              <li>Team features</li>
+              <li>API access</li>
+              </ul>
+            </div>
+            <button id="upgradeEnterprise">Upgrade to Enterprise</button>
+          </div>
+        </div>
+        
+        <div class="payment-history">
+          <h3>Payment History</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Plan</th>
+                <th>Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="paymentHistory">
+              <tr><td colspan="4">No payment history</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="analytics" class="section">
+        <h2>Advanced Analytics</h2>
+        <div class="analytics-controls">
+          <select id="analyticsRange">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+          <button id="exportData">Export Data (CSV)</button>
+        </div>
+        
+        <div class="analytics-charts">
+          <div class="chart-container">
+            <h3>Weekly Mood Pattern</h3>
+            <canvas id="weeklyMoodChart" height="300"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>Emotion Correlation</h3>
+            <canvas id="emotionCorrelationChart" height="300"></canvas>
+          </div>
+        </div>
+        
+        <div class="insights">
+          <h3>Insights</h3>
+          <div id="insightsContent">
+            <p>Your insights will appear here after we analyze more of your entries.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

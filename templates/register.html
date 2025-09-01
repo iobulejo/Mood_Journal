@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mood Journal – Sign Up</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/css/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="auth-container">
+    <div class="auth-form">
+      <h2>Create an Account</h2>
+      <form id="registerForm">
+        <input type="text" id="name" placeholder="Full Name" required>
+        <input type="email" id="email" placeholder="Email" required>
+        <input type="password" id="password" placeholder="Password" required>
+        <input type="password" id="confirmPassword" placeholder="Confirm Password" required>
+        <button type="submit">Sign Up</button>
+      </form>
+      <div class="auth-switch">
+        Already have an account? <a href="/login.html">Log in</a>
+      </div>
+      <div id="authStatus"></div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('registerForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const confirmPassword = document.getElementById('confirmPassword').value;
+      const statusEl = document.getElementById('authStatus');
+      
+      if (password !== confirmPassword) {
+        statusEl.textContent = 'Passwords do not match';
+        statusEl.className = 'error';
+        return;
+      }
+      
+      statusEl.textContent = 'Creating account...';
+      statusEl.className = '';
+      
+      try {
+        const response = await fetch('/api/register', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name, email, password })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Registration failed');
+        }
+        
+        const data = await response.json();
+        
+        // Save token and user data
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('currentUser', JSON.stringify(data.user));
+        
+        statusEl.textContent = 'Account created! Redirecting...';
+        statusEl.className = 'success';
+        
+        // Redirect to dashboard
+        setTimeout(() => {
+          window.location.href = '/dashboard';
+        }, 1000);
+      } catch (error) {
+        statusEl.textContent = error.message;
+        statusEl.className = 'error';
+      }
+    });
+  </script>
+</body>
+</html>

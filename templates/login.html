@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mood Journal – Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/css/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="auth-container">
+    <div class="auth-form">
+      <h2>Login to Mood Journal</h2>
+      <form id="loginForm">
+        <input type="email" id="email" placeholder="Email" required>
+        <input type="password" id="password" placeholder="Password" required>
+        <button type="submit">Login</button>
+      </form>
+      <div class="auth-switch">
+        Don't have an account? <a href="/register.html">Sign up</a>
+      </div>
+      <div id="authStatus"></div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const statusEl = document.getElementById('authStatus');
+      
+      statusEl.textContent = 'Logging in...';
+      statusEl.className = '';
+      
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email, password })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Login failed');
+        }
+        
+        const data = await response.json();
+        
+        // Save token and user data
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('currentUser', JSON.stringify(data.user));
+        
+        statusEl.textContent = 'Login successful! Redirecting...';
+        statusEl.className = 'success';
+        
+        // Redirect to dashboard
+        setTimeout(() => {
+          window.location.href = '/dashboard';
+        }, 1000);
+      } catch (error) {
+        statusEl.textContent = error.message;
+        statusEl.className = 'error';
+      }
+    });
+  </script>
+</body>
+</html>
