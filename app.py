@@ -3,7 +3,7 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
-import mysql.connector
+import psycopg2
 import requests
 import bcrypt
 import jwt
@@ -32,7 +32,7 @@ else:
     # Fallback for local development
     DB_CFG = dict(
         host=os.getenv("DB_HOST", "localhost"),
-        user=os.getenv("DB_USER", "root"),
+        user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASSWORD", ""),
         database=os.getenv("DB_NAME", "mood_journal_db"),
     )
@@ -71,8 +71,8 @@ CORS(app)
 # Helper function to connect to the database
 def connect_db():
     try:
-        return mysql.connector.connect(**DB_CFG)
-    except mysql.connector.Error as err:
+        return psycopg2.connect(**DB_CFG)
+    except psycopg2.OperationalError as err:
         print(f"Database connection failed: {err}")
         return None
 
@@ -156,10 +156,9 @@ def api_register():
         
         # Hash password and insert user
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        cur.execute("INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s)", (name, email, hashed_password))
+        cur.execute("INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s) RETURNING id", (name, email, hashed_password))
+        user_id = cur.fetchone()[0]
         conn.commit()
-        
-        user_id = cur.lastrowid
         
         # Generate JWT
         payload = {'user': {'id': user_id, 'name': name, 'email': email, 'subscription_tier': 'free'}, 'exp': datetime.utcnow() + timedelta(days=7)}
@@ -170,8 +169,8 @@ def api_register():
             "token": token,
             "user": {'id': user_id, 'name': name, 'email': email, 'subscription_tier': 'free'}
         }), 201
-    except mysql.connector.Error as err:
-        print(f"MySQL error: {err}")
+    except psycopg2.Error as err:
+        print(f"PostgreSQL error: {err}")
         return jsonify({"error": "Database error"}), 500
     finally:
         if conn:
@@ -191,7 +190,7 @@ def api_login():
         return jsonify({"error": "Database connection failed"}), 500
 
     try:
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute("SELECT * FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
 
@@ -210,8 +209,8 @@ def api_login():
             })
         else:
             return jsonify({"error": "Invalid email or password"}), 401
-    except mysql.connector.Error as err:
-        print(f"MySQL error: {err}")
+    except psycopg2.Error as err:
+        print(f"PostgreSQL error: {err}")
         return jsonify({"error": "Database error"}), 500
     finally:
         if conn:
@@ -232,7 +231,7 @@ def api_add_entry():
         
         # Check entry limits for 'free' tier
         if user['subscription_tier'] == 'free':
-            cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s AND created_at >= CURDATE() - INTERVAL %s DAY", (user['id'], SUBSCRIPTION_PLANS['free']['history_days']))
+            cur.execute("SELECT COUNT(*) FROM entries WHERE user_id = %s AND created_at >= CURRENT_DATE - INTERVAL '%s days'", (user['id'], SUBSCRIPTION_PLANS['free']['history_days']))
             entry_count = cur.fetchone()[0]
             if entry_count >= SUBSCRIPTION_PLANS['free']['max_entries']:
                 return jsonify({"error": f"Free plan is limited to {SUBSCRIPTION_PLANS['free']['max_entries']} entries per month."}), 403
@@ -257,8 +256,8 @@ def api_add_entry():
             }
         }), 201
 
-    except mysql.connector.Error as err:
-        print(f"MySQL error: {err}")
+    except psycopg2.Error as err:
+        print(f"PostgreSQL error: {err}")
         return jsonify({"error": "Database error"}), 500
     finally:
         if conn:
@@ -275,7 +274,7 @@ def api_get_entries():
         return jsonify({"error": "Database connection failed"}), 500
 
     try:
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         
         limit_days = SUBSCRIPTION_PLANS.get(user['subscription_tier'], SUBSCRIPTION_PLANS['free'])['history_days']
         
@@ -283,7 +282,7 @@ def api_get_entries():
         if limit_days == float('inf'):
             cur.execute("SELECT id, content, emotion_label, emotion_score, created_at FROM entries WHERE user_id = %s ORDER BY created_at DESC", (user['id'],))
         else:
-            cur.execute("SELECT id, content, emotion_label, emotion_score, created_at FROM entries WHERE user_id = %s AND created_at >= CURDATE() - INTERVAL %s DAY ORDER BY created_at DESC", (user['id'], limit_days))
+            cur.execute("SELECT id, content, emotion_label, emotion_score, created_at FROM entries WHERE user_id = %s AND created_at >= CURRENT_DATE - INTERVAL '%s days' ORDER BY created_at DESC", (user['id'], limit_days))
 
         entries = cur.fetchall()
         
@@ -293,8 +292,8 @@ def api_get_entries():
             entry['emotion_score'] = str(entry['emotion_score'])
         
         return jsonify({"entries": entries})
-    except mysql.connector.Error as err:
-        print(f"MySQL error: {err}")
+    except psycopg2.Error as err:
+        print(f"PostgreSQL error: {err}")
         return jsonify({"error": "Database error"}), 500
     finally:
         if conn:
@@ -319,7 +318,7 @@ def api_get_stats():
         # Get entries this month
         cur.execute("""
           SELECT COUNT(*) FROM entries 
-          WHERE user_id = %s AND MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE())
+          WHERE user_id = %s AND EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)
         """, (user['id'],))
         monthly_entries = cur.fetchone()[0]
         
@@ -392,7 +391,7 @@ def get_profile_info():
     if conn is None:
         return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute("SELECT name, email, subscription_tier, created_at FROM users WHERE id = %s", (user['id'],))
         profile_info = cur.fetchone()
 
