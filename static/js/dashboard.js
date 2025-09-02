@@ -51,23 +51,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // Event listener for saving a new entry
     document.getElementById('saveEntry').addEventListener('click', saveEntry);
 
-  // Event listeners for subscription upgrade buttons
-document.getElementById('upgradePremium').addEventListener('click', () => {
-    manageSubscription('premium');
-});
+    // Event listeners for subscription upgrade buttons
+    document.getElementById('upgradePremium').addEventListener('click', () => {
+        manageSubscription('premium');
+    });
 
-document.getElementById('upgradeEnterprise').addEventListener('click', () => {
-    manageSubscription('enterprise');
-});
+    document.getElementById('upgradeEnterprise').addEventListener('click', () => {
+        manageSubscription('enterprise');
+    });
 
-// Event listener for the free plan button to handle downgrades
-document.getElementById('freePlan').addEventListener('click', () => {
-    const isDowngradeButton = document.getElementById('freePlan').textContent.includes('Downgrade');
-    if (isDowngradeButton) {
-        manageSubscription('free');
-    }
-});
-
+    // Event listener for the free plan button to handle downgrades
+    document.getElementById('freePlan').addEventListener('click', () => {
+        const isDowngradeButton = document.getElementById('freePlan').textContent.includes('Downgrade');
+        if (isDowngradeButton) {
+            manageSubscription('free');
+        }
+    });
+    
     // Initial section display
     showSection('overview');
 });
@@ -125,26 +125,6 @@ async function manageSubscription(planTier) {
         return;
     }
 
-    // Downgrade to free plan handled locally
-    if (planTier === 'free') {
-        const response = await fetch('/api/subscription/upgrade', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ plan: planTier })
-        });
-        if (response.ok) {
-            alert('Your plan has been downgraded to Free.');
-            fetchProfile(); // Refresh profile UI
-        } else {
-            const error = await response.json();
-            alert(error.error || 'Failed to downgrade plan.');
-        }
-        return;
-    }
-
     try {
         const response = await fetch('/api/subscription/upgrade', {
             method: 'POST',
@@ -157,23 +137,19 @@ async function manageSubscription(planTier) {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to initiate payment.');
+            throw new Error(error.error || 'Failed to manage subscription.');
         }
 
         const data = await response.json();
-        if (data.link) {
-            // Redirect the user to the Paystack payment page
-            window.location.href = data.link;
-        } else {
-            alert('Failed to get a payment link. Please try again.');
-        }
-
+        alert(data.message);
+        
+        // Re-fetch profile to update the UI with the new plan
+        fetchProfile();
     } catch (error) {
-        console.error('Payment error:', error);
+        console.error('Subscription management error:', error);
         alert(error.message);
     }
 }
-
 
 // Function to update the subscription UI
 function updateSubscriptionUI(currentPlan, isExpired) {
