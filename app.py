@@ -15,7 +15,8 @@ import collections
 from collections import defaultdict
 
 load_dotenv()
-
+ # Ensure DB is created when running locally
+    init_db()
 HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 HF_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"} if HF_API_TOKEN else {}
 EMOTION_MODEL = os.getenv("EMOTION_MODEL", "j-hartmann/emotion-english-distilroberta-base")
@@ -652,7 +653,7 @@ def get_stats():
 
 
 if __name__ == "__main__":
-    # Ensure DB is created when running locally
-    init_db()
-    app.run(debug=True)
+   
+    app.run(debug=False)
+
 
