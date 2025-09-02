@@ -655,3 +655,4 @@ if __name__ == "__main__":
     # Ensure DB is created when running locally
     init_db()
     app.run(debug=True)
+
