@@ -1,9 +1,24 @@
-/* Dashboard Styles */
+/*
+* Dashboard Styles
+* This stylesheet handles the layout and visual presentation of the user dashboard,
+* including the sidebar, main content area, statistics cards, charts, and forms.
+*/
+
+/* -------------------------------------- */
+/* Global Layout and Structure */
+/* -------------------------------------- */
+
+/* Main dashboard container layout using flexbox for a sidebar and main content */
 .dashboard {
   display: flex;
-  min-height: calc(100vh - 80px);
+  min-height: calc(100vh - 80px); /* Adjust height to fill viewport minus header/footer */
 }
 
+/* -------------------------------------- */
+/* Navigation Sidebar */
+/* -------------------------------------- */
+
+/* Styles for the left-hand navigation sidebar */
 .sidebar {
   width: 250px;
   background: rgba(255, 255, 255, 0.05);
@@ -12,7 +27,7 @@
 }
 
 .sidebar nav ul {
-  list-style: none;
+  list-style: none; /* Removes bullet points from list */
   padding: 0;
   margin: 0;
 }
@@ -21,8 +36,9 @@
   margin-bottom: 10px;
 }
 
+/* Styles for navigation links */
 .sidebar nav a {
-  display: block;
+  display: block; /* Makes the entire list item clickable */
   padding: 12px 15px;
   color: var(--text);
   text-decoration: none;
@@ -30,17 +46,20 @@
   transition: background 0.3s;
 }
 
+/* Hover and active states for navigation links */
 .sidebar nav a:hover,
 .sidebar nav a.active {
   background: rgba(96, 165, 250, 0.2);
 }
 
+/* Main content area, takes up remaining space and allows for scrolling */
 .main-content {
   flex: 1;
   padding: 20px;
   overflow-y: auto;
 }
 
+/* Toggles visibility of different dashboard sections */
 .section {
   display: none;
 }
@@ -55,7 +74,11 @@
   gap: 15px;
 }
 
-/* Stats Grid */
+/* -------------------------------------- */
+/* Dashboard Statistics Cards */
+/* -------------------------------------- */
+
+/* Grid layout for displaying key statistics */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -63,6 +86,7 @@
   margin-bottom: 30px;
 }
 
+/* Styling for each individual stat card */
 .stat-card {
   background: linear-gradient(135deg, rgba(96, 165, 250, 0.1), rgba(96, 165, 250, 0.05));
   border: 1px solid rgba(96, 165, 250, 0.2);
@@ -86,19 +110,28 @@
   color: var(--accent);
 }
 
-/* Charts */
+/* -------------------------------------- */
+/* Chart and Visualization Containers */
+/* -------------------------------------- */
+
 .charts-row {
   display: flex;
-  grid-template-columns: 1fr 1fr;
+  flex-wrap: wrap; /* Allows charts to wrap to a new line on smaller screens */
   gap: 20px;
   margin-bottom: 30px;
 }
 
+/* Container for each chart */
 .chart-container {
+  flex: 1 1 45%; /* Allows containers to grow and shrink, with a base width of 45% */
+  min-width: 300px; /* Prevents containers from getting too small on narrow screens */
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 20px;
+  height: 450px; /* Set a fixed height for the chart containers */
+  display: flex;
+  flex-direction: column;
 }
 
 .chart-container h3 {
@@ -106,7 +139,17 @@
   font-size: 16px;
 }
 
-/* Subscription Plans */
+/* Styles for the canvas element inside the chart container */
+.chart-container canvas {
+  flex-grow: 1; /* Makes the canvas fill the remaining space of the container */
+  max-height: 100%;
+}
+
+/* -------------------------------------- */
+/* Subscription Plan Section */
+/* -------------------------------------- */
+
+/* Grid layout for subscription plan cards */
 .plans-container {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -114,14 +157,17 @@
   margin-bottom: 30px;
 }
 
+/* Styling for each individual plan card */
 .plan-card {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   padding: 25px;
   text-align: center;
+  transition: transform 0.3s, border-color 0.3s;
 }
 
+/* Featured plan card with a subtle highlight */
 .plan-card.featured {
   border-color: var(--accent);
   background: linear-gradient(135deg, rgba(96, 165, 250, 0.1), rgba(96, 165, 250, 0.05));
@@ -171,7 +217,11 @@
   color: var(--text);
 }
 
-/* Subscription Status */
+/* -------------------------------------- */
+/* User Profile and Subscription Status */
+/* -------------------------------------- */
+
+/* Container for displaying subscription details */
 .subscription-status {
   margin-top: 30px;
   padding: 15px;
@@ -185,6 +235,7 @@
   color: var(--muted);
 }
 
+/* Styles for the subscription plan badge */
 .plan-badge {
   display: inline-block;
   padding: 4px 10px;
@@ -209,14 +260,17 @@
   color: #a78bfa;
 }
 
+/* -------------------------------------- */
 /* Payment History */
+/* -------------------------------------- */
+
 .payment-history {
   margin-top: 30px;
 }
 
 .payment-history table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: collapse; /* Removes space between table cells */
 }
 
 .payment-history th,
@@ -233,7 +287,11 @@
   font-size: 12px;
 }
 
-/* Entries List */
+/* -------------------------------------- */
+/* Journal Entries List and Forms */
+/* -------------------------------------- */
+
+/* Container for the list of journal entries */
 .entries-list {
   margin: 20px 0;
 }
@@ -258,7 +316,7 @@
   font-size: 14px;
 }
 
-/* Forms */
+/* Styles for the journal entry form */
 .entry-form {
   margin-bottom: 20px;
 }
@@ -288,21 +346,7 @@
   border-radius: 6px;
 }
 
-/* Analytics */
-.analytics-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.analytics-charts {
-  display: flex;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  margin-bottom: 30px;
-}
-
+/* Insights section for advanced analytics */
 .insights {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -314,10 +358,14 @@
   margin: 0 0 15px 0;
 }
 
-/* Responsive */
+/* -------------------------------------- */
+/* Responsive Design */
+/* -------------------------------------- */
+
+/* Adjust layout for screens smaller than 768px */
 @media (max-width: 768px) {
   .dashboard {
-    flex-direction: column;
+    flex-direction: column; /* Stacks the sidebar and main content vertically */
   }
   
   .sidebar {
@@ -328,45 +376,14 @@
   
   .charts-row,
   .analytics-charts {
-    grid-template-columns: 1fr;
+    flex-direction: column; /* Stacks charts vertically */
   }
   
   .plans-container {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr; /* Single column layout for plans */
   }
   
   .plan-card.featured {
-    transform: none;
+    transform: none; /* Removes the scaling effect on mobile */
   }
-}
-
-/* Chart analytics */
-
-.analytics-charts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
-}
-
-.chart-container {
-    flex: 1 1 45%; /* Allows containers to grow and shrink, with a base width of 45% */
-    min-width: 300px; /* Prevents containers from getting too small on narrow screens */
-    /* background-color: #ffffff; */
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    height: 450px; /* Set a fixed height for the chart containers */
-    display: flex;
-    flex-direction: column;
-}
-
-.chart-container h3 {
-    margin-top: 0;
-    margin-bottom: 10px;
-    font-size: 1.25rem;
-}
-
-.chart-container canvas {
-    flex-grow: 1; /* Makes the canvas fill the remaining space of the container */
-    max-height: 100%;
 }
