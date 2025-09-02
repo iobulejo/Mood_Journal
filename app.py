@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
 import psycopg2 # Changed from mysql.connector
-from psycopg2.extras import RealDictCursor # To get dictionary-like rows
 from urllib.parse import urlparse # To parse DATABASE_URL
 import requests
 import bcrypt
@@ -605,3 +604,4 @@ def get_stats():
 if __name__ == "__main__":
     init_db()
     app.run(debug=True)
+
